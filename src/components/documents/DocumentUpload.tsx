@@ -4,8 +4,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/contexts/AuthContext";
-import { Upload, FileText, CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
+import { Upload, FileText, CheckCircle2, AlertCircle, Loader2, Eye, FileSearch } from "lucide-react";
 
 interface DocumentUploadProps {
   campaignId?: string;
@@ -14,8 +15,18 @@ interface DocumentUploadProps {
 type DocumentType = "student_id" | "admission_letter" | "fee_receipt";
 
 interface UploadStatus {
-  type: "idle" | "uploading" | "success" | "error";
+  type: "idle" | "uploading" | "extracting" | "success" | "error";
   message?: string;
+}
+
+interface OCRResult {
+  extractedText: string;
+  confidence: number;
+  wordCount: number;
+  detectedInstitution: string | null;
+  detectedInfo: Record<string, string>;
+  confidenceFlag: string;
+  textLength: number;
 }
 
 const DOCUMENT_TYPES = [
@@ -32,6 +43,9 @@ export const DocumentUpload = ({ campaignId }: DocumentUploadProps) => {
   const [documentType, setDocumentType] = useState<DocumentType | "">("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploadStatus, setUploadStatus] = useState<UploadStatus>({ type: "idle" });
+  const [ocrResult, setOcrResult] = useState<OCRResult | null>(null);
+  const [uploadedFilePath, setUploadedFilePath] = useState<string | null>(null);
+  const [showExtractedText, setShowExtractedText] = useState(false);
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -98,18 +112,11 @@ export const DocumentUpload = ({ campaignId }: DocumentUploadProps) => {
       const data = await response.json();
 
       if (response.ok && data.success) {
-        setUploadStatus({
-          type: "success",
-          message: "Document uploaded successfully!"
-        });
+        setUploadedFilePath(data.data.path);
         
-        // Reset form
-        setSelectedFile(null);
-        setDocumentType("");
-        
-        // Reset file input
-        const fileInput = document.getElementById("document-file") as HTMLInputElement;
-        if (fileInput) fileInput.value = "";
+        // Automatically trigger OCR extraction
+        setUploadStatus({ type: "extracting", message: "Extracting text from document..." });
+        await extractText(data.data.path, documentType);
       } else {
         setUploadStatus({
           type: "error",
@@ -122,6 +129,72 @@ export const DocumentUpload = ({ campaignId }: DocumentUploadProps) => {
         type: "error",
         message: "Network error. Please make sure the backend server is running."
       });
+    }
+  };
+
+  const extractText = async (filePath: string, docType: DocumentType) => {
+    try {
+      const response = await fetch("http://localhost:3001/api/documents/extract-text", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          filePath: filePath,
+          documentType: docType
+        })
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        setOcrResult(data.data);
+        
+        // Check if there was a GraphicsMagick error
+        if (data.data.error && data.data.error.includes('GraphicsMagick')) {
+          setUploadStatus({
+            type: "error",
+            message: "Document uploaded but PDF processing requires GraphicsMagick. Install it to process scanned PDFs. JPG/PNG files work without it."
+          });
+        } else {
+          setUploadStatus({
+            type: "success",
+            message: "Document uploaded and text extracted successfully!"
+          });
+        }
+        
+        // Reset form
+        setSelectedFile(null);
+        setDocumentType("");
+        
+        // Reset file input
+        const fileInput = document.getElementById("document-file") as HTMLInputElement;
+        if (fileInput) fileInput.value = "";
+      } else {
+        setUploadStatus({
+          type: "error",
+          message: `Document uploaded but OCR failed: ${data.message || "Unknown error"}`
+        });
+      }
+    } catch (error) {
+      console.error("OCR extraction error:", error);
+      setUploadStatus({
+        type: "error",
+        message: "Document uploaded but text extraction failed. Please ensure the backend server is running."
+      });
+    }
+  };
+
+  const getConfidenceBadge = (flag: string) => {
+    switch (flag) {
+      case "high":
+        return <Badge className="bg-green-500">High Confidence</Badge>;
+      case "medium":
+        return <Badge className="bg-yellow-500">Medium Confidence</Badge>;
+      case "low":
+        return <Badge variant="destructive">Low Confidence</Badge>;
+      default:
+        return <Badge variant="outline">Unknown</Badge>;
     }
   };
 
@@ -189,13 +262,18 @@ export const DocumentUpload = ({ campaignId }: DocumentUploadProps) => {
         {/* Upload Button */}
         <Button
           onClick={handleUpload}
-          disabled={!selectedFile || !documentType || uploadStatus.type === "uploading"}
+          disabled={!selectedFile || !documentType || uploadStatus.type === "uploading" || uploadStatus.type === "extracting"}
           className="w-full"
         >
           {uploadStatus.type === "uploading" ? (
             <>
               <Loader2 className="h-4 w-4 mr-2 animate-spin" />
               Uploading...
+            </>
+          ) : uploadStatus.type === "extracting" ? (
+            <>
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              Extracting Text...
             </>
           ) : (
             <>
@@ -220,6 +298,77 @@ export const DocumentUpload = ({ campaignId }: DocumentUploadProps) => {
             <AlertCircle className="h-4 w-4" />
             <AlertDescription>{uploadStatus.message}</AlertDescription>
           </Alert>
+        )}
+
+        {/* OCR Results */}
+        {ocrResult && (
+          <div className="space-y-3 mt-4">
+            <div className="flex items-center justify-between">
+              <h4 className="font-medium flex items-center gap-2">
+                <FileSearch className="h-4 w-4" />
+                Extracted Information
+              </h4>
+              {getConfidenceBadge(ocrResult.confidenceFlag)}
+            </div>
+
+            <div className="bg-muted/50 p-4 rounded-lg space-y-3">
+              {/* Statistics */}
+              <div className="grid grid-cols-2 gap-2 text-sm">
+                <div>
+                  <span className="text-muted-foreground">Word Count:</span>
+                  <span className="ml-2 font-medium">{ocrResult.wordCount}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">OCR Confidence:</span>
+                  <span className="ml-2 font-medium">{Math.round(ocrResult.confidence)}%</span>
+                </div>
+              </div>
+
+              {/* Detected Institution */}
+              {ocrResult.detectedInstitution && (
+                <div className="pt-2 border-t">
+                  <p className="text-sm text-muted-foreground">Institution Detected:</p>
+                  <p className="font-medium">{ocrResult.detectedInstitution}</p>
+                </div>
+              )}
+
+              {/* Detected Information */}
+              {Object.keys(ocrResult.detectedInfo).length > 0 && (
+                <div className="pt-2 border-t">
+                  <p className="text-sm text-muted-foreground mb-2">Detected Details:</p>
+                  <div className="space-y-1">
+                    {Object.entries(ocrResult.detectedInfo).map(([key, value]) => (
+                      <div key={key} className="text-sm">
+                        <span className="text-muted-foreground capitalize">
+                          {key.replace(/([A-Z])/g, ' $1').trim()}:
+                        </span>
+                        <span className="ml-2 font-medium">{value}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* View Extracted Text */}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowExtractedText(!showExtractedText)}
+                className="w-full"
+              >
+                <Eye className="h-3 w-3 mr-2" />
+                {showExtractedText ? "Hide" : "View"} Extracted Text
+              </Button>
+
+              {showExtractedText && (
+                <div className="pt-2 border-t">
+                  <div className="max-h-60 overflow-y-auto bg-background p-3 rounded border text-xs font-mono whitespace-pre-wrap">
+                    {ocrResult.extractedText || "No text extracted"}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
         )}
       </CardContent>
     </Card>

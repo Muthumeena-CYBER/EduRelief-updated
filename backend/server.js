@@ -4,6 +4,7 @@ import multer from 'multer';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
+import { processDocument, cleanupTempFiles } from './ocrProcessor.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -135,6 +136,64 @@ app.get('/api/documents/:userId', (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error fetching documents',
+      error: error.message
+    });
+  }
+});
+
+// OCR text extraction endpoint
+app.post('/api/documents/extract-text', async (req, res) => {
+  try {
+    const { filePath, documentType } = req.body;
+
+    // Validate required fields
+    if (!filePath || !documentType) {
+      return res.status(400).json({
+        success: false,
+        message: 'filePath and documentType are required'
+      });
+    }
+
+    // Validate document type
+    const validTypes = ['student_id', 'admission_letter', 'fee_receipt'];
+    if (!validTypes.includes(documentType)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid document type'
+      });
+    }
+
+    // Check if file exists
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({
+        success: false,
+        message: 'File not found'
+      });
+    }
+
+    console.log(`Starting OCR extraction for: ${filePath}`);
+    
+    // Process the document with OCR
+    const result = await processDocument(filePath, documentType);
+
+    if (result.success) {
+      res.status(200).json({
+        success: true,
+        message: 'Text extracted successfully',
+        data: result
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        message: 'OCR extraction failed',
+        error: result.error
+      });
+    }
+  } catch (error) {
+    console.error('OCR extraction error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error during text extraction',
       error: error.message
     });
   }
