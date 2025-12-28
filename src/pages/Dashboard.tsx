@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
+import { DocumentUpload } from "@/components/documents";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import {
@@ -287,6 +288,8 @@ const Dashboard = () => {
             </div>
 
             <div className="space-y-8">
+              <DocumentUpload />
+              
               <Card>
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2"><BookOpen className="h-5 w-5" />Resources</CardTitle>
